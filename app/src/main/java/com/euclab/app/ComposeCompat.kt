@@ -6,5 +6,5 @@ import androidx.compose.runtime.Composable
 
 /** Small compatibility shim so MainActivity stays focused on the prototype UI. */
 fun ComponentActivity.setContent(content: @Composable () -> Unit) {
-    this.activitySetContent(content)
+    this.activitySetContent(content = content)
 }
