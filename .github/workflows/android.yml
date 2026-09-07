@@ -18,7 +18,12 @@ jobs:
         with:
           gradle-version: '9.6.0'
       - name: Install Android SDK packages
-        run: yes | sdkmanager "platforms;android-37" "build-tools;36.0.0" >/dev/null
+        shell: bash
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
+          SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-37" "build-tools;36.0.0"
       - name: Build
         run: gradle :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
