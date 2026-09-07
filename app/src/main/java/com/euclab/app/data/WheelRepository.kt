@@ -8,6 +8,9 @@ object WheelRepository {
     private val _telemetry = MutableStateFlow<Telemetry?>(null)
     val telemetry: StateFlow<Telemetry?> = _telemetry.asStateFlow()
 
+    private val _bms = MutableStateFlow<BmsSnapshot?>(null)
+    val bms: StateFlow<BmsSnapshot?> = _bms.asStateFlow()
+
     private val _linkState = MutableStateFlow(LinkState.IDLE)
     val linkState: StateFlow<LinkState> = _linkState.asStateFlow()
 
@@ -25,6 +28,14 @@ object WheelRepository {
 
     fun publishTelemetry(value: Telemetry) {
         _telemetry.value = value
+    }
+
+    fun publishBms(value: BmsSnapshot) {
+        _bms.value = value
+    }
+
+    fun clearBms() {
+        _bms.value = null
     }
 
     fun setLink(state: LinkState, message: String) {
