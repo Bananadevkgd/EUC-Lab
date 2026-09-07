@@ -109,6 +109,7 @@ class BleWheelManager(private val context: Context) {
         }
         stopScan()
         decoder.reset()
+        WheelRepository.clearTelemetry()
         WheelRepository.clearBms()
         gatt?.close()
         WheelRepository.setLink(LinkState.CONNECTING, "Connecting to ${candidateMap[address]?.name ?: address}…")
@@ -121,6 +122,7 @@ class BleWheelManager(private val context: Context) {
         runCatching { gatt?.close() }
         gatt = null
         decoder.reset()
+        WheelRepository.clearTelemetry()
         WheelRepository.clearBms()
         WheelRepository.setLink(LinkState.IDLE, "Disconnected")
     }
@@ -135,6 +137,7 @@ class BleWheelManager(private val context: Context) {
                 }
                 android.bluetooth.BluetoothProfile.STATE_DISCONNECTED -> {
                     decoder.reset()
+                    WheelRepository.clearTelemetry()
                     WheelRepository.clearBms()
                     WheelRepository.setLink(LinkState.IDLE, "Disconnected (status $status)")
                 }
