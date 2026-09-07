@@ -30,6 +30,10 @@ object WheelRepository {
         _telemetry.value = value
     }
 
+    fun clearTelemetry() {
+        _telemetry.value = null
+    }
+
     fun publishBms(value: BmsSnapshot) {
         _bms.value = value
     }
