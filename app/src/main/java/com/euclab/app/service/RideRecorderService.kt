@@ -46,7 +46,7 @@ class RideRecorderService : Service() {
         val ridesDir = File(filesDir, "rides").apply { mkdirs() }
         val file = File(ridesDir, "ride_${System.currentTimeMillis()}.csv")
         writer = BufferedWriter(FileWriter(file)).apply {
-            write("timestamp_iso,timestamp_ms,speed_kmh,voltage_v,phase_current_a,mosfet_temp_c,pitch_deg,pwm_percent,trip_km,total_km,firmware_raw,charging\n")
+            write("timestamp_iso,timestamp_ms,speed_kmh,voltage_v,phase_current_a,mosfet_temp_c,pitch_deg,pwm_percent,trip_km,total_km,firmware_raw,charging,battery_percent,model\n")
             flush()
         }
         WheelRepository.setLastLogPath(file.absolutePath)
@@ -71,6 +71,8 @@ class RideRecorderService : Service() {
                             t.totalKm,
                             t.firmwareRaw,
                             t.charging,
+                            t.batteryPercent,
+                            t.model.replace(',', ' '),
                         ).joinToString(",")
                     )
                     newLine()
@@ -94,7 +96,7 @@ class RideRecorderService : Service() {
     private fun buildNotification(fileName: String): Notification =
         Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
-            .setContentTitle("EUC Lab · recording ride")
+            .setContentTitle("EUC Lab · запись поездки")
             .setContentText(fileName)
             .setOngoing(true)
             .build()
