@@ -27,6 +27,10 @@ class BleWheelManager(private val context: Context) {
     private val adapter get() = bluetoothManager?.adapter
     private val decoder = VeteranFrameDecoder()
     private var gatt: BluetoothGatt? = null
+    private var wheelCharacteristic: BluetoothGattCharacteristic? = null
+
+    private val _lightOn = MutableStateFlow(false)
+    val lightOn: StateFlow<Boolean> = _lightOn.asStateFlow()
 
     private val devicesByAddress = linkedMapOf<String, android.bluetooth.BluetoothDevice>()
     private val candidateMap = linkedMapOf<String, BleCandidate>()
@@ -111,6 +115,7 @@ class BleWheelManager(private val context: Context) {
         decoder.reset()
         WheelRepository.clearTelemetry()
         WheelRepository.clearBms()
+        wheelCharacteristic = null
         gatt?.close()
         WheelRepository.setLink(LinkState.CONNECTING, "Connecting to ${candidateMap[address]?.name ?: address}…")
         gatt = device.connectGatt(context, false, callback, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
@@ -121,10 +126,56 @@ class BleWheelManager(private val context: Context) {
         runCatching { gatt?.disconnect() }
         runCatching { gatt?.close() }
         gatt = null
+        wheelCharacteristic = null
         decoder.reset()
         WheelRepository.clearTelemetry()
         WheelRepository.clearBms()
         WheelRepository.setLink(LinkState.IDLE, "Disconnected")
+    }
+
+    /** Veteran/LeaperKim command channel. These command strings match the public Veteran protocol. */
+    fun setLight(on: Boolean): Boolean {
+        val ok = sendCommand(if (on) "SetLightON".encodeToByteArray() else "SetLightOFF".encodeToByteArray())
+        if (ok) _lightOn.value = on
+        return ok
+    }
+
+    fun beep(): Boolean = sendCommand(
+        byteArrayOf(
+            0x4c, 0x6b, 0x41, 0x70, 0x0e, 0x00,
+            0x80.toByte(), 0x80.toByte(), 0x80.toByte(), 0x01,
+            0xca.toByte(), 0x87.toByte(), 0xe6.toByte(), 0x6f,
+        )
+    )
+
+    fun setPedalMode(mode: Int): Boolean = when (mode) {
+        0 -> sendCommand("SETh".encodeToByteArray())
+        1 -> sendCommand("SETm".encodeToByteArray())
+        2 -> sendCommand("SETs".encodeToByteArray())
+        else -> false
+    }
+
+    fun resetTrip(): Boolean = sendCommand("CLEARMETER".encodeToByteArray())
+
+    @SuppressLint("MissingPermission")
+    private fun sendCommand(bytes: ByteArray): Boolean {
+        if (!canConnect() || WheelRepository.linkState.value != LinkState.CONNECTED) return false
+        val currentGatt = gatt ?: return false
+        val characteristic = wheelCharacteristic ?: return false
+        return if (Build.VERSION.SDK_INT >= 33) {
+            currentGatt.writeCharacteristic(
+                characteristic,
+                bytes,
+                BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE,
+            ) == BluetoothGatt.GATT_SUCCESS
+        } else {
+            @Suppress("DEPRECATION")
+            run {
+                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+                characteristic.value = bytes
+                currentGatt.writeCharacteristic(characteristic)
+            }
+        }
     }
 
     private val callback = object : BluetoothGattCallback() {
@@ -136,6 +187,7 @@ class BleWheelManager(private val context: Context) {
                     gatt.discoverServices()
                 }
                 android.bluetooth.BluetoothProfile.STATE_DISCONNECTED -> {
+                    wheelCharacteristic = null
                     decoder.reset()
                     WheelRepository.clearTelemetry()
                     WheelRepository.clearBms()
@@ -158,6 +210,7 @@ class BleWheelManager(private val context: Context) {
                 WheelRepository.setLink(LinkState.ERROR, "FFE1 characteristic not found")
                 return
             }
+            wheelCharacteristic = characteristic
             gatt.setCharacteristicNotification(characteristic, true)
             val cccd = characteristic.getDescriptor(CCCD_UUID) ?: run {
                 WheelRepository.setLink(LinkState.ERROR, "CCCD descriptor not found")
