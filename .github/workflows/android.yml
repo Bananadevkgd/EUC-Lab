@@ -23,7 +23,7 @@ jobs:
           SDK_ROOT="${ANDROID_SDK_ROOT:-$ANDROID_HOME}"
           SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
           yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" "platforms;android-37" "build-tools;36.0.0"
+          "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
       - name: Build
         run: gradle :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4

@@ -42,16 +42,16 @@ Current toolchain baseline:
 - Gradle 9.6.0
 - Kotlin 2.3.21
 - Compose BOM 2026.08.00
-- compileSdk 37 / targetSdk 36
+- compileSdk 36 / targetSdk 36
 - Java 17
 
 ### GitHub Actions
 
-Push the project to a GitHub repository. The included workflow builds `app-debug.apk` and uploads it as the `euc-lab-debug-apk` artifact.
+The included workflow builds `app-debug.apk` and uploads it as the `euc-lab-debug-apk` artifact on every push to `main`.
 
 ### Android Studio
 
-Open the project in Android Studio Quail 4 or newer. If Android Studio asks for a Gradle distribution, select Gradle 9.6.0. Install Android SDK Platform 37 and Build Tools 36.0.0, sync, then build the `debug` variant.
+Open the project in Android Studio Quail 4 or newer. If Android Studio asks for a Gradle distribution, select Gradle 9.6.0. Install Android SDK Platform 36 and Build Tools 36.0.0, sync, then build the `debug` variant.
 
 ## Next milestones
 
