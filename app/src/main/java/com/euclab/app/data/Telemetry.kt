@@ -12,6 +12,8 @@ data class Telemetry(
     val totalKm: Float,
     val firmwareRaw: Int,
     val charging: Boolean,
+    val batteryPercent: Int = 0,
+    val model: String = "Veteran",
 )
 
 data class BleCandidate(
