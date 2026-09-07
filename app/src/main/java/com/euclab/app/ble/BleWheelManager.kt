@@ -34,14 +34,8 @@ class BleWheelManager(private val context: Context) {
     val candidates: StateFlow<List<BleCandidate>> = _candidates.asStateFlow()
 
     private val scanCallback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult) {
-            handleScanResult(result)
-        }
-
-        override fun onBatchScanResults(results: MutableList<ScanResult>) {
-            results.forEach(::handleScanResult)
-        }
-
+        override fun onScanResult(callbackType: Int, result: ScanResult) = handleScanResult(result)
+        override fun onBatchScanResults(results: MutableList<ScanResult>) = results.forEach(::handleScanResult)
         override fun onScanFailed(errorCode: Int) {
             WheelRepository.setLink(LinkState.ERROR, "BLE scan failed: $errorCode")
         }
@@ -72,10 +66,8 @@ class BleWheelManager(private val context: Context) {
         return ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED
     }
 
-    fun canConnect(): Boolean {
-        return Build.VERSION.SDK_INT < 31 ||
-            ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
-    }
+    fun canConnect(): Boolean = Build.VERSION.SDK_INT < 31 ||
+        ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
 
     @SuppressLint("MissingPermission")
     fun startScan() {
@@ -117,6 +109,7 @@ class BleWheelManager(private val context: Context) {
         }
         stopScan()
         decoder.reset()
+        WheelRepository.clearBms()
         gatt?.close()
         WheelRepository.setLink(LinkState.CONNECTING, "Connecting to ${candidateMap[address]?.name ?: address}…")
         gatt = device.connectGatt(context, false, callback, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
@@ -128,6 +121,7 @@ class BleWheelManager(private val context: Context) {
         runCatching { gatt?.close() }
         gatt = null
         decoder.reset()
+        WheelRepository.clearBms()
         WheelRepository.setLink(LinkState.IDLE, "Disconnected")
     }
 
@@ -141,6 +135,7 @@ class BleWheelManager(private val context: Context) {
                 }
                 android.bluetooth.BluetoothProfile.STATE_DISCONNECTED -> {
                     decoder.reset()
+                    WheelRepository.clearBms()
                     WheelRepository.setLink(LinkState.IDLE, "Disconnected (status $status)")
                 }
             }
@@ -174,9 +169,7 @@ class BleWheelManager(private val context: Context) {
                     gatt.writeDescriptor(cccd)
                 }
             }
-            if (!wrote) {
-                WheelRepository.setLink(LinkState.ERROR, "Could not enable FFE1 notifications")
-            }
+            if (!wrote) WheelRepository.setLink(LinkState.ERROR, "Could not enable FFE1 notifications")
         }
 
         override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
@@ -199,14 +192,14 @@ class BleWheelManager(private val context: Context) {
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic,
             value: ByteArray
-        ) {
-            onBytes(value)
-        }
+        ) = onBytes(value)
     }
 
     private fun onBytes(bytes: ByteArray) {
         WheelRepository.setRawPacket(bytes.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }.take(240))
-        decoder.feed(bytes).forEach(WheelRepository::publishTelemetry)
+        val decoded = decoder.feed(bytes)
+        decoded.forEach(WheelRepository::publishTelemetry)
+        if (decoded.isNotEmpty()) decoder.latestBmsSnapshot()?.let(WheelRepository::publishBms)
     }
 
     companion object {
