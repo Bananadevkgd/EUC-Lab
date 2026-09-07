@@ -13,8 +13,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         ble = BleWheelManager(applicationContext)
         setContent {
-            AppThemeV4 {
-                EucLabAppV4(ble)
+            AppThemeV5 {
+                EucLabAppV5(ble)
             }
         }
     }
