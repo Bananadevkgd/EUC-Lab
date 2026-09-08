@@ -32,9 +32,20 @@ fun V7SafetyOverlay(ble: BleWheelManager) {
     val telemetry by WheelRepository.telemetry.collectAsState()
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("euc_lab_settings", Context.MODE_PRIVATE) }
-    val alarmEnabled = remember { prefs.getBoolean("app_pwm_alarm_enabled", true) }
-    val alarmThreshold = remember { prefs.getInt("app_pwm_alarm_threshold", 75).coerceIn(50, 95) }
+    var alarmEnabled by remember { mutableStateOf(prefs.getBoolean("app_pwm_alarm_enabled", true)) }
+    var alarmThreshold by remember { mutableIntStateOf(prefs.getInt("app_pwm_alarm_threshold", 75).coerceIn(50, 95)) }
     val tone = remember { ToneGenerator(AudioManager.STREAM_ALARM, 92) }
+
+    DisposableEffect(prefs) {
+        val listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            when (key) {
+                "app_pwm_alarm_enabled" -> alarmEnabled = prefs.getBoolean(key, true)
+                "app_pwm_alarm_threshold" -> alarmThreshold = prefs.getInt(key, 75).coerceIn(50, 95)
+            }
+        }
+        prefs.registerOnSharedPreferenceChangeListener(listener)
+        onDispose { prefs.unregisterOnSharedPreferenceChangeListener(listener) }
+    }
     DisposableEffect(Unit) { onDispose { tone.release() } }
 
     val pwm = telemetry?.pwmPercent ?: 0f
