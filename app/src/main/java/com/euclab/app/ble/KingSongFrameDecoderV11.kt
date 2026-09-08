@@ -3,7 +3,7 @@ package com.euclab.app.ble
 import com.euclab.app.data.Telemetry
 
 /**
- * Minimal clean-room KingSong telemetry decoder for EUC Lab v0.0.11.
+ * Minimal clean-room KingSong telemetry decoder for EUC Lab v0.0.11+.
  *
  * Protocol facts used here are public interoperability facts:
  * fixed 20-byte frames, AA 55 header, frame type at byte 16,
@@ -98,7 +98,9 @@ class KingSongFrameDecoderV11 {
                 speedKmh = rawSpeed / 100f
                 currentA = rawCurrent / 100f
                 tempC = rawTemp / 100f
-                if (batteryPercent <= 0) batteryPercent = estimateBattery(rawVoltage, model)
+                // Always refresh the voltage-derived fallback. If a valid BMS SOC frame
+                // arrives later (0xF6), that direct value replaces this estimate.
+                batteryPercent = estimateBattery(rawVoltage, model)
                 hasLiveData = rawVoltage > 0
             }
             0xF5 -> {
@@ -140,12 +142,18 @@ class KingSongFrameDecoderV11 {
     private fun parseAdvertisedModel(name: String): String? {
         val upper = name.trim().uppercase()
         if (!upper.startsWith("KS-")) return null
+        // KS-14SMD is a controller/firmware family used by the later KS-14D/14M/14S
+        // generation. Advertising names often append digits (for example KS-14SMD4317),
+        // which are not part of the model identifier.
+        if (upper.startsWith("KS-14SMD")) return "KS-14SMD"
         return upper.substringBefore(' ').take(24)
     }
 
     private fun parseModelFromName(name: String): String? {
         val trimmed = name.trim()
         if (trimmed.isBlank()) return null
+        val upper = trimmed.uppercase()
+        if (upper.startsWith("KS-14SMD")) return "KS-14SMD"
         val parts = trimmed.split('-')
         return if (parts.size > 2 && parts.last().all(Char::isDigit)) {
             parts.dropLast(1).joinToString("-")
@@ -164,7 +172,9 @@ class KingSongFrameDecoderV11 {
             upper.startsWith("KS-X") -> Triple(3125, 4125, 10)
             upper.startsWith("KS-S9") -> Triple(3750, 4950, 12)
             upper.startsWith("KS-N") && !upper.startsWith("KS-N12P") -> Triple(4063, 5363, 13)
-            else -> return 0
+            // Legacy/default KingSong family is 16S / ~67 V. This includes KS-14SMD,
+            // KS-14D/14M/14S and other older models unless a higher-voltage family is known.
+            else -> Triple(5000, 6600, 16)
         }
         return when {
             rawVoltage <= empty -> 0
