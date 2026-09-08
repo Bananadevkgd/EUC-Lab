@@ -32,6 +32,10 @@ class BleWheelManager(private val context: Context) {
     private var gatt: BluetoothGatt? = null
     private var wheelCharacteristic: BluetoothGattCharacteristic? = null
     private val commandHandler = Handler(Looper.getMainLooper())
+    private val reconnectHandler = Handler(Looper.getMainLooper())
+    private val prefs = context.getSharedPreferences("ble_profile", Context.MODE_PRIVATE)
+    private var currentAddress: String? = null
+    private var autoConnectScan = false
 
     private val _lightOn = MutableStateFlow(false)
     val lightOn: StateFlow<Boolean> = _lightOn.asStateFlow()
@@ -45,6 +49,7 @@ class BleWheelManager(private val context: Context) {
         override fun onScanResult(callbackType: Int, result: ScanResult) = handleScanResult(result)
         override fun onBatchScanResults(results: MutableList<ScanResult>) = results.forEach(::handleScanResult)
         override fun onScanFailed(errorCode: Int) {
+            autoConnectScan = false
             WheelRepository.setLink(LinkState.ERROR, "BLE scan failed: $errorCode")
         }
     }
@@ -65,6 +70,12 @@ class BleWheelManager(private val context: Context) {
         _candidates.value = candidateMap.values
             .sortedWith(compareByDescending<BleCandidate> { it.likelyEuc }.thenByDescending { it.rssi })
             .take(20)
+
+        val saved = rememberedWheelAddress()
+        if (autoConnectScan && saved != null && device.address.equals(saved, ignoreCase = true)) {
+            autoConnectScan = false
+            connect(device.address)
+        }
     }
 
     fun canScan(): Boolean {
@@ -77,8 +88,24 @@ class BleWheelManager(private val context: Context) {
     fun canConnect(): Boolean = Build.VERSION.SDK_INT < 31 ||
         ActivityCompat.checkSelfPermission(context, Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
 
+    fun isAutoConnectEnabled(): Boolean = prefs.getBoolean("auto_connect", true)
+    fun setAutoConnectEnabled(enabled: Boolean) { prefs.edit().putBoolean("auto_connect", enabled).apply() }
+    fun rememberedWheelAddress(): String? = prefs.getString("last_address", null)
+    fun rememberedWheelName(): String? = prefs.getString("last_name", null)
+
     @SuppressLint("MissingPermission")
-    fun startScan() {
+    fun startScan() = startScanInternal(autoTarget = false)
+
+    @SuppressLint("MissingPermission")
+    fun startAutoConnect() {
+        if (!isAutoConnectEnabled() || rememberedWheelAddress().isNullOrBlank()) return
+        if (!canScan() || !canConnect()) return
+        if (WheelRepository.linkState.value in setOf(LinkState.CONNECTED, LinkState.CONNECTING, LinkState.DISCOVERING)) return
+        startScanInternal(autoTarget = true)
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun startScanInternal(autoTarget: Boolean) {
         if (!canScan()) {
             WheelRepository.setLink(LinkState.ERROR, "Bluetooth permission is missing")
             return
@@ -88,16 +115,26 @@ class BleWheelManager(private val context: Context) {
             WheelRepository.setLink(LinkState.ERROR, "Bluetooth is unavailable or disabled")
             return
         }
+        runCatching { scanner.stopScan(scanCallback) }
         candidateMap.clear()
         devicesByAddress.clear()
         _candidates.value = emptyList()
-        WheelRepository.setLink(LinkState.SCANNING, "Scanning nearby BLE devices…")
+        autoConnectScan = autoTarget
+        WheelRepository.setLink(LinkState.SCANNING, if (autoTarget) "Looking for saved wheel…" else "Scanning nearby BLE devices…")
         scanner.startScan(scanCallback)
+        commandHandler.postDelayed({
+            if (WheelRepository.linkState.value == LinkState.SCANNING) {
+                runCatching { scanner.stopScan(scanCallback) }
+                autoConnectScan = false
+                WheelRepository.setLink(LinkState.IDLE, "Scan stopped")
+            }
+        }, if (autoTarget) 12_000L else 20_000L)
     }
 
     @SuppressLint("MissingPermission")
     fun stopScan() {
         if (!canScan()) return
+        autoConnectScan = false
         runCatching { adapter?.bluetoothLeScanner?.stopScan(scanCallback) }
         if (WheelRepository.linkState.value == LinkState.SCANNING) {
             WheelRepository.setLink(LinkState.IDLE, "Scan stopped")
@@ -116,20 +153,25 @@ class BleWheelManager(private val context: Context) {
             return
         }
         stopScan()
+        reconnectHandler.removeCallbacksAndMessages(null)
         decoder.reset()
         WheelRepository.clearTelemetry()
         WheelRepository.clearBms()
         wheelCharacteristic = null
-        gatt?.close()
+        runCatching { gatt?.close() }
+        currentAddress = address
         WheelRepository.setLink(LinkState.CONNECTING, "Connecting to ${candidateMap[address]?.name ?: address}…")
         gatt = device.connectGatt(context, false, callback, android.bluetooth.BluetoothDevice.TRANSPORT_LE)
     }
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
+        reconnectHandler.removeCallbacksAndMessages(null)
+        autoConnectScan = false
         runCatching { gatt?.disconnect() }
         runCatching { gatt?.close() }
         gatt = null
+        currentAddress = null
         wheelCharacteristic = null
         decoder.reset()
         WheelRepository.clearTelemetry()
@@ -137,9 +179,23 @@ class BleWheelManager(private val context: Context) {
         WheelRepository.setLink(LinkState.IDLE, "Disconnected")
     }
 
-    /** Veteran/LeaperKim command channel. These command strings match the public Veteran protocol. */
+    private fun rememberConnectedWheel() {
+        val address = currentAddress ?: return
+        val name = candidateMap[address]?.name ?: rememberedWheelName() ?: address
+        prefs.edit().putString("last_address", address).putString("last_name", name).apply()
+    }
+
+    private fun scheduleReconnect() {
+        if (!isAutoConnectEnabled() || rememberedWheelAddress().isNullOrBlank()) return
+        reconnectHandler.removeCallbacksAndMessages(null)
+        reconnectHandler.postDelayed({ startAutoConnect() }, 1800L)
+    }
+
     fun setLight(on: Boolean): Boolean {
-        val ok = sendCommand(if (on) "SetLightON".encodeToByteArray() else "SetLightOFF".encodeToByteArray())
+        val ver = currentModelVersion()
+        val ok = if (ver >= 3) {
+            sendStream(buildVeteranCommandOld(0x0D, 8, if (on) 1 else 0) + buildVeteranCommandNew(0x0D, 8, if (on) 1 else 0))
+        } else sendCommand(if (on) "SetLightON".encodeToByteArray() else "SetLightOFF".encodeToByteArray())
         if (ok) _lightOn.value = on
         return ok
     }
@@ -150,53 +206,58 @@ class BleWheelManager(private val context: Context) {
         return sendStream(old + newer)
     }
 
-    fun setKeyToneVolume(percent: Int): Boolean {
-        val value = percent.coerceIn(0, 100)
-        return sendStream(buildVeteranCommandNew(0x1C, 23, value, byte5 = 0x01, byte6 = 0x02))
+    fun setKeyToneVolume(percent: Int): Boolean = sendNew(0x1C, 23, percent.coerceIn(0, 100))
+
+    fun setPedalMode(mode: Int): Boolean {
+        val value = when (mode) { 0 -> 3; 1 -> 2; 2 -> 1; else -> return false }
+        return if (currentModelVersion() >= 3) sendOldAndNew(0x0C, 7, value)
+        else sendCommand(when (mode) { 0 -> "SETh"; 1 -> "SETm"; else -> "SETs" }.encodeToByteArray())
     }
 
-    fun setPedalMode(mode: Int): Boolean = when (mode) {
-        0 -> sendCommand("SETh".encodeToByteArray())
-        1 -> sendCommand("SETm".encodeToByteArray())
-        2 -> sendCommand("SETs".encodeToByteArray())
-        else -> false
-    }
+    fun resetTrip(): Boolean = if (currentModelVersion() >= 3) {
+        sendStream(buildVeteranCommandOld(0x0B, 6, 1, 0x00) + buildVeteranCommandNew(0x0D, 8, 1, 0x00, 0x02))
+    } else sendCommand("CLEARMETER".encodeToByteArray())
 
-    fun resetTrip(): Boolean = sendCommand("CLEARMETER".encodeToByteArray())
+    fun setAlarmSpeed(kmh: Int): Boolean = sendOldAndNew(0x11, 12, kmh.coerceIn(0, 120))
+    fun setPedalTilt(tenthsDeg: Int): Boolean = sendOldAndNew(0x10, 11, tenthsDeg.coerceIn(-80, 80))
+    fun setTransportMode(enabled: Boolean): Boolean = sendNew(0x16, 17, if (enabled) 1 else 0)
+    fun setHighSpeedMode(enabled: Boolean): Boolean = sendNew(0x1A, 21, if (enabled) 1 else 0)
+    fun setLowVoltageMode(enabled: Boolean): Boolean = sendNew(0x19, 20, if (enabled) 1 else 0)
+    fun setScreenBacklight(percent: Int): Boolean = sendNew(0x14, 15, percent.coerceIn(0, 100))
+    fun setStopSpeed(raw: Int): Boolean = sendNew(0x11, 12, raw.coerceIn(0, 100))
+    fun setPwmLimitRaw(raw: Int): Boolean = sendNew(0x12, 13, raw.coerceIn(0, 100))
+    fun setVoltageCorrection(value: Int): Boolean = sendNew(0x18, 19, value.coerceIn(-15, 15))
+    fun setMaxChargeVoltageRaw(value: Int): Boolean = sendNew(0x1D, 24, value.coerceIn(0, 120))
+    fun setBrakePressureAlarm(value: Int): Boolean = sendNew(0x22, 29, value.coerceIn(0, 150))
+    fun setLateralCutoffAngle(angle: Int): Boolean = sendOldAndNew(0x16, 17, angle.coerceIn(0, 90), newByte6 = 0x00)
+    fun setDynamicAssist(value: Int): Boolean = sendNew(0x1F, 26, value.coerceIn(0, 100))
+    fun setAccelerationLimit(value: Int): Boolean = sendNew(0x21, 28, value.coerceIn(0, 100))
+    fun setWheelDisplayMiles(miles: Boolean): Boolean = sendNew(0x17, 18, if (miles) 1 else 0)
+    fun setPedalHardness(value: Int): Boolean = sendNew(0x0F, 10, value.coerceIn(0, 100))
+    fun calibrate(): Boolean = sendStream(buildVeteranCommandNew(0x15, 16, 1, byte5 = 0x01, byte6 = 0x02))
+
+    private fun currentModelVersion(): Int = WheelRepository.telemetry.value?.firmwareRaw?.div(1000) ?: 0
+    private fun sendNew(cmd: Int, pos: Int, value: Int): Boolean = sendStream(buildVeteranCommandNew(cmd, pos, value, 0x01, 0x02))
+    private fun sendOldAndNew(cmd: Int, pos: Int, value: Int, oldByte5: Int = 0x01, newByte6: Int = 0x00): Boolean =
+        sendStream(buildVeteranCommandOld(cmd, pos, value, oldByte5) + buildVeteranCommandNew(cmd, pos, value, oldByte5, newByte6))
 
     private fun buildVeteranCommandOld(cmdByte: Int, valuePosition: Int, value: Int, byte5: Int = 0x01): ByteArray {
         val payload = ByteArray(valuePosition + 1) { 0x80.toByte() }
-        payload[0] = 0x4C
-        payload[1] = 0x6B
-        payload[2] = 0x41
-        payload[3] = 0x70
-        payload[4] = cmdByte.toByte()
-        payload[5] = byte5.toByte()
-        payload[valuePosition] = value.toByte()
+        payload[0] = 0x4C; payload[1] = 0x6B; payload[2] = 0x41; payload[3] = 0x70
+        payload[4] = cmdByte.toByte(); payload[5] = byte5.toByte(); payload[valuePosition] = value.toByte()
         return appendVeteranCrc(payload)
     }
 
     private fun buildVeteranCommandNew(cmdByte: Int, valuePosition: Int, value: Int, byte5: Int = 0x01, byte6: Int = 0x00): ByteArray {
         val payload = ByteArray(valuePosition + 1) { 0x80.toByte() }
-        payload[0] = 0x4C
-        payload[1] = 0x64
-        payload[2] = 0x41
-        payload[3] = 0x70
-        payload[4] = cmdByte.toByte()
-        payload[5] = byte5.toByte()
-        payload[6] = byte6.toByte()
-        payload[valuePosition] = value.toByte()
+        payload[0] = 0x4C; payload[1] = 0x64; payload[2] = 0x41; payload[3] = 0x70
+        payload[4] = cmdByte.toByte(); payload[5] = byte5.toByte(); payload[6] = byte6.toByte(); payload[valuePosition] = value.toByte()
         return appendVeteranCrc(payload)
     }
 
     private fun appendVeteranCrc(payload: ByteArray): ByteArray {
         val crc = CRC32().apply { update(payload) }.value
-        return payload + byteArrayOf(
-            ((crc shr 24) and 0xFF).toByte(),
-            ((crc shr 16) and 0xFF).toByte(),
-            ((crc shr 8) and 0xFF).toByte(),
-            (crc and 0xFF).toByte(),
-        )
+        return payload + byteArrayOf(((crc shr 24) and 0xFF).toByte(), ((crc shr 16) and 0xFF).toByte(), ((crc shr 8) and 0xFF).toByte(), (crc and 0xFF).toByte())
     }
 
     private fun sendStream(bytes: ByteArray): Boolean {
@@ -209,9 +270,7 @@ class BleWheelManager(private val context: Context) {
             offset = end
         }
         if (!sendCommand(chunks.first())) return false
-        chunks.drop(1).forEachIndexed { index, chunk ->
-            commandHandler.postDelayed({ sendCommand(chunk) }, 55L * (index + 1))
-        }
+        chunks.drop(1).forEachIndexed { index, chunk -> commandHandler.postDelayed({ sendCommand(chunk) }, 55L * (index + 1)) }
         return true
     }
 
@@ -221,92 +280,65 @@ class BleWheelManager(private val context: Context) {
         val currentGatt = gatt ?: return false
         val characteristic = wheelCharacteristic ?: return false
         return if (Build.VERSION.SDK_INT >= 33) {
-            currentGatt.writeCharacteristic(
-                characteristic,
-                bytes,
-                BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE,
-            ) == BluetoothGatt.GATT_SUCCESS
+            currentGatt.writeCharacteristic(characteristic, bytes, BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) == BluetoothGatt.GATT_SUCCESS
         } else {
             @Suppress("DEPRECATION")
-            run {
-                characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
-                characteristic.value = bytes
-                currentGatt.writeCharacteristic(characteristic)
-            }
+            run { characteristic.writeType = BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE; characteristic.value = bytes; currentGatt.writeCharacteristic(characteristic) }
         }
     }
 
     private val callback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
-        override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+        override fun onConnectionStateChange(callbackGatt: BluetoothGatt, status: Int, newState: Int) {
+            if (gatt != null && callbackGatt !== gatt) return
             when (newState) {
                 android.bluetooth.BluetoothProfile.STATE_CONNECTED -> {
                     WheelRepository.setLink(LinkState.DISCOVERING, "Connected. Discovering services…")
-                    gatt.discoverServices()
+                    callbackGatt.discoverServices()
                 }
                 android.bluetooth.BluetoothProfile.STATE_DISCONNECTED -> {
                     wheelCharacteristic = null
                     decoder.reset()
                     WheelRepository.clearTelemetry()
                     WheelRepository.clearBms()
-                    WheelRepository.setLink(LinkState.IDLE, "Disconnected (status $status)")
+                    runCatching { callbackGatt.close() }
+                    if (callbackGatt === gatt) gatt = null
+                    WheelRepository.setLink(LinkState.IDLE, "Disconnected (status $status) · auto reconnect armed")
+                    scheduleReconnect()
                 }
             }
         }
 
         @SuppressLint("MissingPermission")
-        override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
-            if (status != BluetoothGatt.GATT_SUCCESS) {
-                WheelRepository.setLink(LinkState.ERROR, "Service discovery failed: $status")
-                return
-            }
-            val service: BluetoothGattService = gatt.getService(SERVICE_UUID) ?: run {
-                WheelRepository.setLink(LinkState.ERROR, "FFE0 service not found")
-                return
-            }
-            val characteristic = service.getCharacteristic(CHAR_UUID) ?: run {
-                WheelRepository.setLink(LinkState.ERROR, "FFE1 characteristic not found")
-                return
-            }
+        override fun onServicesDiscovered(callbackGatt: BluetoothGatt, status: Int) {
+            if (status != BluetoothGatt.GATT_SUCCESS) { WheelRepository.setLink(LinkState.ERROR, "Service discovery failed: $status"); return }
+            val service: BluetoothGattService = callbackGatt.getService(SERVICE_UUID) ?: run { WheelRepository.setLink(LinkState.ERROR, "FFE0 service not found"); return }
+            val characteristic = service.getCharacteristic(CHAR_UUID) ?: run { WheelRepository.setLink(LinkState.ERROR, "FFE1 characteristic not found"); return }
             wheelCharacteristic = characteristic
-            gatt.setCharacteristicNotification(characteristic, true)
-            val cccd = characteristic.getDescriptor(CCCD_UUID) ?: run {
-                WheelRepository.setLink(LinkState.ERROR, "CCCD descriptor not found")
-                return
-            }
+            callbackGatt.setCharacteristicNotification(characteristic, true)
+            val cccd = characteristic.getDescriptor(CCCD_UUID) ?: run { WheelRepository.setLink(LinkState.ERROR, "CCCD descriptor not found"); return }
             val wrote = if (Build.VERSION.SDK_INT >= 33) {
-                gatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothGatt.GATT_SUCCESS
+                callbackGatt.writeDescriptor(cccd, BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE) == BluetoothGatt.GATT_SUCCESS
             } else {
-                @Suppress("DEPRECATION")
-                run {
-                    cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    gatt.writeDescriptor(cccd)
-                }
+                @Suppress("DEPRECATION") run { cccd.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE; callbackGatt.writeDescriptor(cccd) }
             }
             if (!wrote) WheelRepository.setLink(LinkState.ERROR, "Could not enable FFE1 notifications")
         }
 
-        override fun onDescriptorWrite(gatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
+        override fun onDescriptorWrite(callbackGatt: BluetoothGatt, descriptor: BluetoothGattDescriptor, status: Int) {
             if (descriptor.uuid == CCCD_UUID) {
                 if (status == BluetoothGatt.GATT_SUCCESS) {
+                    rememberConnectedWheel()
                     WheelRepository.setLink(LinkState.CONNECTED, "Veteran stream armed · waiting for DC 5A 5C")
-                } else {
-                    WheelRepository.setLink(LinkState.ERROR, "Notification setup failed: $status")
-                }
+                } else WheelRepository.setLink(LinkState.ERROR, "Notification setup failed: $status")
             }
         }
 
         @Deprecated("Deprecated in API 33")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
-            @Suppress("DEPRECATION")
-            onBytes(characteristic.value ?: return)
+            @Suppress("DEPRECATION") onBytes(characteristic.value ?: return)
         }
-
-        override fun onCharacteristicChanged(
-            gatt: BluetoothGatt,
-            characteristic: BluetoothGattCharacteristic,
-            value: ByteArray
-        ) = onBytes(value)
+        override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic, value: ByteArray) = onBytes(value)
     }
 
     private fun onBytes(bytes: ByteArray) {
