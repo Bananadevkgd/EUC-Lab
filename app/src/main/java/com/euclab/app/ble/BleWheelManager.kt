@@ -145,7 +145,6 @@ class BleWheelManager(private val context: Context) {
     }
 
     fun beep(): Boolean {
-        // Modern LeaperKim firmware expects the horn command in both binary formats.
         val old = buildVeteranCommandOld(0x0E, 9, 1, byte5 = 0x00)
         val newer = buildVeteranCommandNew(0x0E, 9, 1, byte5 = 0x00, byte6 = 0x00)
         return sendStream(old + newer)
@@ -165,15 +164,10 @@ class BleWheelManager(private val context: Context) {
 
     fun resetTrip(): Boolean = sendCommand("CLEARMETER".encodeToByteArray())
 
-    private fun buildVeteranCommandOld(
-        cmdByte: Int,
-        valuePosition: Int,
-        value: Int,
-        byte5: Int = 0x01,
-    ): ByteArray {
+    private fun buildVeteranCommandOld(cmdByte: Int, valuePosition: Int, value: Int, byte5: Int = 0x01): ByteArray {
         val payload = ByteArray(valuePosition + 1) { 0x80.toByte() }
         payload[0] = 0x4C
-        payload[1] = 0x6B // LkAp
+        payload[1] = 0x6B
         payload[2] = 0x41
         payload[3] = 0x70
         payload[4] = cmdByte.toByte()
@@ -182,16 +176,10 @@ class BleWheelManager(private val context: Context) {
         return appendVeteranCrc(payload)
     }
 
-    private fun buildVeteranCommandNew(
-        cmdByte: Int,
-        valuePosition: Int,
-        value: Int,
-        byte5: Int = 0x01,
-        byte6: Int = 0x00,
-    ): ByteArray {
+    private fun buildVeteranCommandNew(cmdByte: Int, valuePosition: Int, value: Int, byte5: Int = 0x01, byte6: Int = 0x00): ByteArray {
         val payload = ByteArray(valuePosition + 1) { 0x80.toByte() }
         payload[0] = 0x4C
-        payload[1] = 0x64 // LdAp
+        payload[1] = 0x64
         payload[2] = 0x41
         payload[3] = 0x70
         payload[4] = cmdByte.toByte()
@@ -211,7 +199,6 @@ class BleWheelManager(private val context: Context) {
         )
     }
 
-    /** BLE writes are limited to 20 bytes on the Veteran command channel. */
     private fun sendStream(bytes: ByteArray): Boolean {
         if (bytes.isEmpty()) return false
         val chunks = mutableListOf<ByteArray>()
@@ -221,8 +208,7 @@ class BleWheelManager(private val context: Context) {
             chunks += bytes.copyOfRange(offset, end)
             offset = end
         }
-        val firstOk = sendCommand(chunks.first())
-        if (!firstOk) return false
+        if (!sendCommand(chunks.first())) return false
         chunks.drop(1).forEachIndexed { index, chunk ->
             commandHandler.postDelayed({ sendCommand(chunk) }, 55L * (index + 1))
         }
