@@ -18,6 +18,8 @@
     <application
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
+        android:icon="@drawable/euc_lab_icon"
+        android:roundIcon="@drawable/euc_lab_icon"
         android:label="@string/app_name"
         android:theme="@style/Theme.EucLab">
 
