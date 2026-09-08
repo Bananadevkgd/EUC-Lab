@@ -1,5 +1,23 @@
 package com.euclab.app.data
 
+data class VeteranSettingsSnapshot(
+    val pedalHardness: Int? = null,
+    val stopSpeedRaw: Int? = null,
+    val pwmLimitRaw: Int? = null,
+    val screenBacklightPercent: Int? = null,
+    val transportMode: Boolean? = null,
+    val wheelDisplayMiles: Boolean? = null,
+    val voltageCorrection: Int? = null,
+    val lowVoltageMode: Boolean? = null,
+    val highSpeedMode: Boolean? = null,
+    val keyTonePercent: Int? = null,
+    val maxChargeVoltageRaw: Int? = null,
+    val dynamicAssist: Int? = null,
+    val accelerationLimit: Int? = null,
+    val brakePressureAlarm: Int? = null,
+    val lateralCutoffAngle: Int? = null,
+)
+
 data class Telemetry(
     val timestampMs: Long,
     val speedKmh: Float,
@@ -14,7 +32,9 @@ data class Telemetry(
     val charging: Boolean,
     val batteryPercent: Int = 0,
     val model: String = "Veteran",
+    val autoOffSec: Int = 0,
     val keyTonePercent: Int? = null,
+    val veteranSettings: VeteranSettingsSnapshot = VeteranSettingsSnapshot(),
 )
 
 data class BleCandidate(
