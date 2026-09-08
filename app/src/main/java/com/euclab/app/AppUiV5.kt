@@ -135,8 +135,9 @@ fun EucLabAppV5(ble: BleWheelManager) {
                     V5Screen.HOME -> V5Home(ble, lang, debug) { screen = V5Screen.RIDES }
                     V5Screen.RIDES -> V5Rides(lang)
                     V5Screen.BATTERY -> V5Battery(lang)
-                    V5Screen.WHEEL -> V5Wheel(ble, lang)
+                    V5Screen.WHEEL -> V7WheelScreen(ble, lang == V5Language.RU)
                     V5Screen.SETTINGS -> V5Settings(
+                        ble = ble,
                         lang = lang,
                         debug = debug,
                         onLang = {
@@ -168,7 +169,7 @@ private fun V5Home(ble: BleWheelManager, lang: V5Language, debug: Boolean, openR
     val context = LocalContext.current
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result.values.all { it }) ble.startScan()
+        if (ble.canScan() && ble.canConnect()) ble.startScan()
     }
 
     fun scan() {
@@ -180,7 +181,10 @@ private fun V5Home(ble: BleWheelManager, lang: V5Language, debug: Boolean, openR
                 if (Build.VERSION.SDK_INT >= 31) {
                     add(Manifest.permission.BLUETOOTH_SCAN)
                     add(Manifest.permission.BLUETOOTH_CONNECT)
-                } else add(Manifest.permission.ACCESS_FINE_LOCATION)
+                }
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    add(Manifest.permission.ACCESS_FINE_LOCATION)
+                }
                 if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
             }.toTypedArray()
             permissionLauncher.launch(permissions)
@@ -288,7 +292,7 @@ private fun V5Header(t: Telemetry?, link: LinkState, lang: V5Language) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("EUC LAB", color = Color.White, fontSize = 24.sp, fontWeight = FontWeight.Black)
-            Text("${t?.model ?: "Sherman L"} · v0.0.6", color = V5Muted, fontSize = 12.sp)
+            Text("${t?.model ?: "Sherman L"} · v0.0.7", color = V5Muted, fontSize = 12.sp)
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             V5WheelModelBadge(t?.model, online)
@@ -650,10 +654,26 @@ private fun V5Rides(lang: V5Language) {
     val recording by WheelRepository.recording.collectAsState()
     val lastLog by WheelRepository.lastLogPath.collectAsState()
     var selected by remember { mutableStateOf<File?>(null) }
+    var expanded by remember { mutableStateOf<File?>(null) }
     val files = remember(lastLog, recording) { RideLogReader.listRides(context.filesDir) }
 
+    expanded?.let { file ->
+        V7RideDetail(RideLogReader.read(file), lang == V5Language.RU) { expanded = null }
+        return
+    }
+
     selected?.let { file ->
-        V5Replay(RideLogReader.read(file), lang) { selected = null }
+        Box(Modifier.fillMaxSize()) {
+            V5Replay(RideLogReader.read(file), lang) { selected = null }
+            Button(
+                onClick = { expanded = file },
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = V5Accent, contentColor = Color.Black),
+                shape = RoundedCornerShape(18.dp),
+            ) {
+                Text(lang.t("ОТКРЫТЬ РАСШИРЕННЫЙ ЛОГ", "OPEN EXPANDED LOG"), fontSize = 10.sp, fontWeight = FontWeight.Black)
+            }
+        }
         return
     }
 
@@ -1048,10 +1068,10 @@ private fun V5Wheel(ble: BleWheelManager, lang: V5Language) {
 }
 
 @Composable
-private fun V5Settings(lang: V5Language, debug: Boolean, onLang: (V5Language) -> Unit, onDebug: (Boolean) -> Unit) {
+private fun V5Settings(ble: BleWheelManager, lang: V5Language, debug: Boolean, onLang: (V5Language) -> Unit, onDebug: (Boolean) -> Unit) {
     LazyColumn(modifier = Modifier.fillMaxSize().padding(horizontal = 18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
         item { Spacer(Modifier.height(28.dp)) }
-        item { V5SectionHeader(lang.t("Настройки", "Settings"), "EUC Lab · v0.0.6") }
+        item { V5SectionHeader(lang.t("Настройки", "Settings"), "EUC Lab · v0.0.7") }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = V5Surface), shape = RoundedCornerShape(22.dp)) {
                 Column(Modifier.padding(17.dp)) {
@@ -1082,6 +1102,11 @@ private fun V5Settings(lang: V5Language, debug: Boolean, onLang: (V5Language) ->
                     Spacer(Modifier.height(6.dp))
                     Text(lang.t("Сейчас режим P определяется по отсутствию скорости, PWM и моторного тока. После теста на Sherman L заменим это на точный флаг протокола, если он доступен в телеметрии.", "P mode is currently inferred from zero speed, PWM and motor current. After Sherman L testing we will switch to an exact protocol flag if one is present."), color = V5Muted, fontSize = 11.sp, lineHeight = 16.sp)
                 }
+            }
+        }
+        item {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                V7AppSettingsExtras(ble, lang == V5Language.RU)
             }
         }
         item { Spacer(Modifier.height(24.dp)) }

@@ -110,8 +110,11 @@ class VeteranFrameDecoder {
         val temperature = i16be(frame, 18) / 100f
         val autoOffSec = u16be(frame, 20)
         val chargeMode = u16be(frame, 22)
+        val alertSpeed = u16be(frame, 24)
+        val tiltbackSpeed = u16be(frame, 26)
         val firmware = u16be(frame, 28)
         val modelVersion = firmware / 1000
+        val pedalsMode = u16be(frame, 30)
         val pitch = i16be(frame, 32) / 100f
         val pwm = u16be(frame, 34) / 100f
 
@@ -135,6 +138,9 @@ class VeteranFrameDecoder {
             batteryPercent = batteryPercent(modelVersion, voltageRaw),
             model = modelName(modelVersion),
             autoOffSec = autoOffSec,
+            alertSpeedKmh = alertSpeed,
+            tiltbackSpeedKmh = tiltbackSpeed,
+            pedalsModeRaw = pedalsMode,
             keyTonePercent = latestSettings.keyTonePercent,
             veteranSettings = latestSettings,
         )
