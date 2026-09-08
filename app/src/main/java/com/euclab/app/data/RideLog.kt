@@ -15,6 +15,13 @@ data class RideSample(
     val tripKm: Float,
     val totalKm: Float,
     val batteryPercent: Int? = null,
+    val autoOffSec: Int? = null,
+    val latitude: Double? = null,
+    val longitude: Double? = null,
+    val gpsAccuracyM: Float? = null,
+    val altitudeM: Double? = null,
+    val gpsSpeedMps: Float? = null,
+    val bearingDeg: Float? = null,
 )
 
 data class RideLog(
@@ -29,15 +36,15 @@ data class RideLog(
     val minVoltageV: Float get() = samples.minOfOrNull { it.voltageV } ?: 0f
     val maxTempC: Float get() = samples.maxOfOrNull { it.mosfetTempC } ?: 0f
     val distanceKm: Float get() = if (samples.size < 2) 0f else (samples.last().tripKm - samples.first().tripKm).coerceAtLeast(0f)
+    val gpsSamples: List<RideSample> get() = samples.filter { it.latitude != null && it.longitude != null }
 }
 
 object RideLogReader {
-    fun listRides(filesDir: File): List<File> =
-        File(filesDir, "rides")
-            .takeIf { it.exists() }
-            ?.listFiles { file -> file.isFile && file.extension.equals("csv", true) }
-            ?.sortedByDescending { it.lastModified() }
-            .orEmpty()
+    fun listRides(filesDir: File): List<File> = File(filesDir, "rides")
+        .takeIf { it.exists() }
+        ?.listFiles { file -> file.isFile && file.extension.equals("csv", true) }
+        ?.sortedByDescending { it.lastModified() }
+        .orEmpty()
 
     fun read(file: File): RideLog {
         val lines = file.readLines()
@@ -47,6 +54,8 @@ object RideLogReader {
 
         fun col(row: List<String>, name: String): String? = index[name]?.let { row.getOrNull(it) }
         fun f(row: List<String>, name: String, fallback: Float = 0f): Float = col(row, name)?.toFloatOrNull() ?: fallback
+        fun fn(row: List<String>, name: String): Float? = col(row, name)?.toFloatOrNull()
+        fun d(row: List<String>, name: String): Double? = col(row, name)?.toDoubleOrNull()
         fun l(row: List<String>, name: String): Long? = col(row, name)?.toLongOrNull()
         fun i(row: List<String>, name: String): Int? = col(row, name)?.toIntOrNull()
 
@@ -67,6 +76,13 @@ object RideLogReader {
                 tripKm = f(row, "trip_km"),
                 totalKm = f(row, "total_km"),
                 batteryPercent = i(row, "battery_percent"),
+                autoOffSec = i(row, "auto_off_sec"),
+                latitude = d(row, "latitude"),
+                longitude = d(row, "longitude"),
+                gpsAccuracyM = fn(row, "gps_accuracy_m"),
+                altitudeM = d(row, "altitude_m"),
+                gpsSpeedMps = fn(row, "gps_speed_mps"),
+                bearingDeg = fn(row, "bearing_deg"),
             )
         }
         return RideLog(file, samples)
