@@ -45,3 +45,5 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
+
+// v0.0.7: GPS rides, auto-connect, safety alarms and advanced LeaperKim controls.
