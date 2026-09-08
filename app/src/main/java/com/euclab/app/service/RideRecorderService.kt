@@ -132,12 +132,21 @@ class RideRecorderService : Service(), LocationListener {
         runCatching { writer?.flush() }
         runCatching { writer?.close() }
         writer = null
-        currentFile?.let { file -> scope.launch { exportRide(file) } }
-        currentFile = null
         latestLocation = null
+
+        val fileToExport = currentFile
+        currentFile = null
         WheelRepository.setRecording(false)
         stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
+
+        if (fileToExport == null) {
+            stopSelf()
+        } else {
+            scope.launch {
+                exportRide(fileToExport)
+                stopSelf()
+            }
+        }
     }
 
     private fun exportRide(file: File) {
@@ -167,8 +176,10 @@ class RideRecorderService : Service(), LocationListener {
     override fun onDestroy() {
         collectJob?.cancel()
         runCatching { locationManager.removeUpdates(this) }
+        runCatching { writer?.flush() }
         runCatching { writer?.close() }
         currentFile?.let { exportRide(it) }
+        currentFile = null
         WheelRepository.setRecording(false)
         scope.cancel()
         super.onDestroy()
