@@ -203,6 +203,20 @@ replace_once(
     }''',
 )
 
+replace_once(
+    ble,
+    '''    private fun sendCommand(bytes: ByteArray): Boolean {
+        if (!canConnect() || WheelRepository.linkState.value != LinkState.CONNECTED) return false
+        val currentGatt = gatt ?: return false''',
+    '''    private fun sendCommand(bytes: ByteArray): Boolean {
+        if (!canConnect() || WheelRepository.linkState.value != LinkState.CONNECTED) return false
+        // Never send Veteran/LeaperKim control packets to an unknown wheel merely
+        // because it exposed a writable BLE characteristic. Commands unlock only
+        // after a valid Veteran frame has positively identified the protocol.
+        if (detectedProtocolLabel != "Veteran / LeaperKim") return false
+        val currentGatt = gatt ?: return false''',
+)
+
 ui = "app/src/main/java/com/euclab/app/AppUiV5.kt"
 replace_all(ui, "v0.0.9", "v0.0.10")
 
