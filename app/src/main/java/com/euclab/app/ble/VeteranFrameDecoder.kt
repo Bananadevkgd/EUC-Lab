@@ -3,6 +3,7 @@ package com.euclab.app.ble
 import com.euclab.app.data.BmsPack
 import com.euclab.app.data.BmsSnapshot
 import com.euclab.app.data.Telemetry
+import com.euclab.app.data.VeteranSettingsSnapshot
 import java.util.zip.CRC32
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -18,7 +19,7 @@ class VeteranFrameDecoder {
     private var bms1Temps: List<Float> = emptyList()
     private var bms2Temps: List<Float> = emptyList()
     private var bmsSeen = false
-    private var latestKeyTonePercent: Int? = null
+    private var latestSettings = VeteranSettingsSnapshot()
 
     fun reset() {
         queue.clear()
@@ -29,13 +30,12 @@ class VeteranFrameDecoder {
         bms1Temps = emptyList()
         bms2Temps = emptyList()
         bmsSeen = false
-        latestKeyTonePercent = null
+        latestSettings = VeteranSettingsSnapshot()
     }
 
     fun feed(chunk: ByteArray): List<Telemetry> {
         if (chunk.isEmpty()) return emptyList()
         val result = mutableListOf<Telemetry>()
-
         chunk.forEach { byte ->
             queue += byte
             alignToMagic()
@@ -108,6 +108,7 @@ class VeteranFrameDecoder {
         val totalMeters = wordSwappedU32(frame, 12)
         val phaseCurrent = i16be(frame, 16) / 10f
         val temperature = i16be(frame, 18) / 100f
+        val autoOffSec = u16be(frame, 20)
         val chargeMode = u16be(frame, 22)
         val firmware = u16be(frame, 28)
         val modelVersion = firmware / 1000
@@ -116,11 +117,7 @@ class VeteranFrameDecoder {
 
         if (voltage !in 20f..220f || abs(speed) > 160f || pwm !in 0f..120f) return null
 
-        if (frame.size > 63 && u8(frame[46]) == 8) {
-            val reportedTone = u8(frame[63])
-            if (reportedTone != 0x80 && reportedTone in 0..100) latestKeyTonePercent = reportedTone
-        }
-
+        decodeExtendedSettings(frame)
         if (modelVersion >= 5) decodeSmartBms(frame)
 
         return Telemetry(
@@ -137,8 +134,50 @@ class VeteranFrameDecoder {
             charging = chargeMode > 0,
             batteryPercent = batteryPercent(modelVersion, voltageRaw),
             model = modelName(modelVersion),
-            keyTonePercent = latestKeyTonePercent,
+            autoOffSec = autoOffSec,
+            keyTonePercent = latestSettings.keyTonePercent,
+            veteranSettings = latestSettings,
         )
+    }
+
+    private fun decodeExtendedSettings(frame: ByteArray) {
+        if (frame.size <= 47) return
+        when (u8(frame[46])) {
+            2 -> {
+                val angle = u8(frame[47]).takeUnless { it == 0 || it == 0x80 }
+                if (angle != null) latestSettings = latestSettings.copy(lateralCutoffAngle = angle)
+            }
+            8 -> {
+                fun unsigned(offset: Int): Int? {
+                    if (offset >= frame.size) return null
+                    return u8(frame[offset]).takeUnless { it == 0x80 }
+                }
+                fun signed(offset: Int): Int? {
+                    if (offset >= frame.size) return null
+                    val raw = u8(frame[offset])
+                    if (raw == 0x80) return null
+                    return frame[offset].toInt()
+                }
+                fun bool(offset: Int): Boolean? = unsigned(offset)?.let { it != 0 }
+
+                latestSettings = latestSettings.copy(
+                    pedalHardness = unsigned(50) ?: latestSettings.pedalHardness,
+                    stopSpeedRaw = unsigned(52) ?: latestSettings.stopSpeedRaw,
+                    pwmLimitRaw = unsigned(53) ?: latestSettings.pwmLimitRaw,
+                    screenBacklightPercent = unsigned(55) ?: latestSettings.screenBacklightPercent,
+                    transportMode = bool(57) ?: latestSettings.transportMode,
+                    wheelDisplayMiles = unsigned(58)?.let { it != 0 } ?: latestSettings.wheelDisplayMiles,
+                    voltageCorrection = signed(59) ?: latestSettings.voltageCorrection,
+                    lowVoltageMode = bool(60) ?: latestSettings.lowVoltageMode,
+                    highSpeedMode = bool(61) ?: latestSettings.highSpeedMode,
+                    keyTonePercent = unsigned(63)?.takeIf { it in 0..100 } ?: latestSettings.keyTonePercent,
+                    maxChargeVoltageRaw = unsigned(64) ?: latestSettings.maxChargeVoltageRaw,
+                    dynamicAssist = unsigned(66) ?: latestSettings.dynamicAssist,
+                    accelerationLimit = unsigned(68) ?: latestSettings.accelerationLimit,
+                    brakePressureAlarm = unsigned(69) ?: latestSettings.brakePressureAlarm,
+                )
+            }
+        }
     }
 
     private fun decodeSmartBms(frame: ByteArray) {
@@ -154,20 +193,15 @@ class VeteranFrameDecoder {
 
         val cells = if (page < 4) bms1Cells else bms2Cells
         when (page) {
-            1, 5 -> {
-                for (i in 0 until 15) {
-                    val offset = 53 + i * 2
-                    if (offset + 1 < frame.size) cells[i] = u16be(frame, offset) / 1000f
-                }
+            1, 5 -> for (i in 0 until 15) {
+                val offset = 53 + i * 2
+                if (offset + 1 < frame.size) cells[i] = u16be(frame, offset) / 1000f
             }
-            2, 6 -> {
-                for (i in 0 until 15) {
-                    val offset = 53 + i * 2
-                    if (offset + 1 < frame.size) cells[i + 15] = u16be(frame, offset) / 1000f
-                }
+            2, 6 -> for (i in 0 until 15) {
+                val offset = 53 + i * 2
+                if (offset + 1 < frame.size) cells[i + 15] = u16be(frame, offset) / 1000f
             }
             3, 7 -> {
-                // Sherman L is 36S: only cells 31..36 from the final cell page are relevant.
                 for (i in 0 until 6) {
                     val offset = 59 + i * 2
                     if (offset + 1 < frame.size) cells[i + 30] = u16be(frame, offset) / 1000f
@@ -230,21 +264,16 @@ class VeteranFrameDecoder {
     }
 
     private fun u8(value: Byte): Int = value.toInt() and 0xFF
-
-    private fun u16be(bytes: ByteArray, offset: Int): Int =
-        (u8(bytes[offset]) shl 8) or u8(bytes[offset + 1])
-
+    private fun u16be(bytes: ByteArray, offset: Int): Int = (u8(bytes[offset]) shl 8) or u8(bytes[offset + 1])
     private fun i16be(bytes: ByteArray, offset: Int): Int {
         val raw = u16be(bytes, offset)
         return if (raw and 0x8000 != 0) raw - 0x10000 else raw
     }
-
     private fun u32be(bytes: ByteArray, offset: Int): Long =
         (u8(bytes[offset]).toLong() shl 24) or
             (u8(bytes[offset + 1]).toLong() shl 16) or
             (u8(bytes[offset + 2]).toLong() shl 8) or
             u8(bytes[offset + 3]).toLong()
-
     private fun wordSwappedU32(bytes: ByteArray, offset: Int): Long =
         (u8(bytes[offset + 2]).toLong() shl 24) or
             (u8(bytes[offset + 3]).toLong() shl 16) or
