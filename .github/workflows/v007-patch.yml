@@ -1,0 +1,118 @@
+name: Integrate v0.0.7
+
+on:
+  push:
+    paths:
+      - '.github/workflows/v007-patch.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Integrate v0.0.7 UI and telemetry
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          ui = Path('app/src/main/java/com/euclab/app/AppUiV5.kt')
+          s = ui.read_text()
+          s = s.replace('v0.0.6', 'v0.0.7')
+          s = s.replace('V5Screen.WHEEL -> V5Wheel(ble, lang)', 'V5Screen.WHEEL -> V7WheelScreen(ble, lang == V5Language.RU)')
+          s = s.replace('V5Screen.SETTINGS -> V5Settings(\n                        lang = lang,', 'V5Screen.SETTINGS -> V5Settings(\n                        ble = ble,\n                        lang = lang,')
+          s = s.replace('private fun V5Settings(lang: V5Language, debug: Boolean, onLang: (V5Language) -> Unit, onDebug: (Boolean) -> Unit)', 'private fun V5Settings(ble: BleWheelManager, lang: V5Language, debug: Boolean, onLang: (V5Language) -> Unit, onDebug: (Boolean) -> Unit)')
+          s = s.replace('if (result.values.all { it }) ble.startScan()', 'if (ble.canScan() && ble.canConnect()) ble.startScan()')
+
+          needle = '''                if (Build.VERSION.SDK_INT >= 31) {
+                    add(Manifest.permission.BLUETOOTH_SCAN)
+                    add(Manifest.permission.BLUETOOTH_CONNECT)
+                } else add(Manifest.permission.ACCESS_FINE_LOCATION)
+                if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)'''
+          repl = '''                if (Build.VERSION.SDK_INT >= 31) {
+                    add(Manifest.permission.BLUETOOTH_SCAN)
+                    add(Manifest.permission.BLUETOOTH_CONNECT)
+                }
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) add(Manifest.permission.ACCESS_FINE_LOCATION)
+                if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)'''
+          if needle in s:
+              s = s.replace(needle, repl)
+
+          s = s.replace('var selected by remember { mutableStateOf<File?>(null) }\n    val files', 'var selected by remember { mutableStateOf<File?>(null) }\n    var expanded by remember { mutableStateOf<File?>(null) }\n    val files')
+          old = '''    selected?.let { file ->
+        V5Replay(RideLogReader.read(file), lang) { selected = null }
+        return
+    }
+'''
+          new = '''    expanded?.let { file ->
+        V7RideDetail(RideLogReader.read(file), lang == V5Language.RU) { expanded = null }
+        return
+    }
+
+    selected?.let { file ->
+        Box(Modifier.fillMaxSize()) {
+            V5Replay(RideLogReader.read(file), lang) { selected = null }
+            Button(
+                onClick = { expanded = file },
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = V5Accent, contentColor = Color.Black),
+                shape = RoundedCornerShape(18.dp),
+            ) {
+                Text(lang.t("ОТКРЫТЬ РАСШИРЕННЫЙ ЛОГ", "OPEN EXPANDED LOG"), fontSize = 10.sp, fontWeight = FontWeight.Black)
+            }
+        }
+        return
+    }
+'''
+          if old not in s:
+              raise SystemExit('ride selected block not found')
+          s = s.replace(old, new)
+
+          marker = '        item { Spacer(Modifier.height(24.dp)) }\n    }\n}\n\n@Composable\nprivate fun V5LanguageButton'
+          extras = '''        item {
+            V7AppSettingsExtras(ble, lang == V5Language.RU)
+        }
+        item { Spacer(Modifier.height(24.dp)) }
+    }
+}
+
+@Composable
+private fun V5LanguageButton'''
+          if marker not in s:
+              raise SystemExit('settings tail marker not found')
+          s = s.replace(marker, extras, 1)
+          ui.write_text(s)
+
+          dec = Path('app/src/main/java/com/euclab/app/ble/VeteranFrameDecoder.kt')
+          d = dec.read_text()
+          d = d.replace('''        val chargeMode = u16be(frame, 22)
+        val firmware = u16be(frame, 28)''', '''        val chargeMode = u16be(frame, 22)
+        val alertSpeed = u16be(frame, 24)
+        val tiltbackSpeed = u16be(frame, 26)
+        val firmware = u16be(frame, 28)''')
+          d = d.replace('''        val modelVersion = firmware / 1000
+        val pitch = i16be(frame, 32)''', '''        val modelVersion = firmware / 1000
+        val pedalsMode = u16be(frame, 30)
+        val pitch = i16be(frame, 32)''')
+          d = d.replace('''            autoOffSec = autoOffSec,
+            keyTonePercent = latestSettings.keyTonePercent,''', '''            autoOffSec = autoOffSec,
+            alertSpeedKmh = alertSpeed,
+            tiltbackSpeedKmh = tiltbackSpeed,
+            pedalsModeRaw = pedalsMode,
+            keyTonePercent = latestSettings.keyTonePercent,''')
+          dec.write_text(d)
+
+          gradle = Path('app/build.gradle.kts')
+          g = gradle.read_text().replace('versionCode = 6', 'versionCode = 7').replace('versionName = "0.0.6"', 'versionName = "0.0.7"')
+          gradle.write_text(g)
+          PY
+      - name: Commit integration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add app/src/main/java/com/euclab/app/AppUiV5.kt app/src/main/java/com/euclab/app/ble/VeteranFrameDecoder.kt app/build.gradle.kts
+          git commit -m 'Integrate EUC Lab v0.0.7' || exit 0
+          git push
