@@ -67,11 +67,12 @@ replace_once(
     }''',
     '''    fun setLight(on: Boolean): Boolean {
         if (detectedProtocolLabel == "KingSong") {
-            // KingSong light/mute command 0x73. Preserve voice enabled in byte 3;
-            // byte 2 uses 0x12=off, 0x13=on (0x14 is auto, not used by this toggle).
+            // KingSong 0x73 combines light mode and mute state. Do not guess the
+            // neighbouring mute byte: wait until a B9 status frame has reported it.
+            val muteFlag = kingSongDecoder.muteFlagByteOrNull() ?: return false
             val frame = kingSongRequest(0x73)
             frame[2] = if (on) 0x13 else 0x12
-            frame[3] = 0x00
+            frame[3] = muteFlag
             val ok = writeTransportBytes(frame)
             if (ok) _lightOn.value = on
             return ok
