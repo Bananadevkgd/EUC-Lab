@@ -1,65 +1,81 @@
-# EUC Lab — prototype v0.0.1
+# EUC Lab
 
-Working Android prototype for a modern EUC ride companion. The first hardware target is Veteran Sherman L.
+**EUC Lab** — Android-приложение для моноколёс с живой телеметрией, GPS-логами, Smart BMS, предупреждениями и управлением поддерживаемыми настройками колеса.
 
-## What is already implemented
+Текущая версия разработки: **v0.0.8**.
 
-- Jetpack Compose dashboard with demo/live modes.
-- BLE scanning and connection.
-- Veteran/LeaperKim GATT profile: service `FFE0`, notify/write characteristic `FFE1`.
-- Veteran frame reassembly by `DC 5A 5C` magic and CRC32 validation for long frames.
-- Base telemetry: speed, voltage, phase current, MOSFET temperature, pitch, PWM, trip/total distance, firmware raw value and charging flag.
-- Raw BLE packet preview for field diagnostics.
-- Foreground ride recorder that writes live telemetry to an internal CSV file.
-- GitHub Actions workflow that builds a debug APK.
+> Проект активно развивается и тестируется на реальных моноколёсах. EUC Lab не заменяет штатные системы безопасности и предупреждения самого колеса.
 
-## Bench test on Sherman L
+## Что уже работает
 
-1. Turn the wheel on and keep the vendor app / WheelLog disconnected so only EUC Lab owns the BLE link.
-2. Install and launch EUC Lab.
-3. Tap `DEMO` to switch to live mode.
-4. Tap `SCAN / CONNECT` and grant Bluetooth permissions.
-5. Pick the wheel from the nearby BLE list. Likely EUC candidates are sorted first.
-6. Expected link status: `Veteran stream armed · waiting for DC 5A 5C` and then `LIVE TELEMETRY`.
-7. With the wheel safely stationary, compare voltage, temperature and pitch with a known-good app.
-8. Lift-spin testing should only be done safely and with the wheel restrained. No control commands are implemented in this build.
-9. If telemetry does not appear, capture a screenshot of the link status and the `RAW` hex line. That is enough to diagnose the next parser/connection change.
+- подключение к Veteran / LeaperKim по BLE;
+- автоматическое переподключение к последнему колесу;
+- определение моделей семейства Veteran / LeaperKim;
+- скорость, напряжение, фазный ток, температура MOSFET, угол наклона, пробег и состояние зарядки;
+- аппаратный PWM там, где его отдаёт контроллер;
+- Smart BMS и данные аккумулятора для поддерживаемых моделей;
+- GPS-запись поездки;
+- расширенный просмотр лога с графиками скорости, PWM, напряжения, тока и температуры;
+- маршрут поездки с окраской по PWM или скорости;
+- экспорт и отправка CSV;
+- собственные звуковые предупреждения EUC Lab по PWM;
+- предупреждение перед автоматическим выключением колеса;
+- управление фарой, сигналом и рядом настроек Veteran / LeaperKim;
+- расширенные настройки с пояснениями и сохранением исходных значений для восстановления;
+- отдельная поддержка ближнего / дальнего света Lynx S;
+- русский и английский интерфейс;
+- модельная capability-система для дальнейшего подключения других производителей.
 
-## Important limitations of v0.0.1
+## Поддержка колёс
 
-- This is a bench prototype, not a safety device.
-- SOS/crash detection is NOT implemented yet.
-- GPS is NOT implemented yet.
-- Battery percentage and Smart-BMS cell UI are NOT implemented yet.
-- The recorder currently stores wheel telemetry only; BLE lifetime across aggressive Android process/background management still needs real-device testing.
-- No commands are sent to the wheel. This build is read-only.
+На данный момент основной рабочий и тестируемый протокол — **Veteran / LeaperKim BLE**.
 
-## Build
+В семейство входят Sherman, Sherman S, Sherman L, Abrams, Patton, Patton S, Lynx, Lynx S, Oryx и другие совместимые модели. Наличие конкретной функции зависит от модели и прошивки.
 
-Current toolchain baseline:
+Архитектура EUC Lab уже разделяет протокол, модель и её возможности. В дальнейшем планируется подключение отдельных декодеров для:
 
-- Android Gradle Plugin 9.4.0
-- Gradle 9.6.0
-- Kotlin 2.3.21
-- Compose BOM 2026.08.00
-- compileSdk 36 / targetSdk 36
-- Java 17
+- Begode / Gotway;
+- Extreme Bull;
+- KingSong;
+- Inmotion;
+- новых LeaperKim с CAN-over-BLE;
+- других EUC, для которых достоверно восстановлен протокол.
 
-### GitHub Actions
+Поддержка нового бренда считается готовой только после проверки реальных пакетов и телеметрии. Приложение не показывает неподтверждённые данные как достоверные.
 
-The included workflow builds `app-debug.apk` and uploads it as the `euc-lab-debug-apk` artifact on every push to `main`.
+## Безопасность
 
-### Android Studio
+PWM-алармы EUC Lab являются **дополнительными**. Они не заменяют писки, tilt-back и остальные механизмы безопасности контроллера колеса.
 
-Open the project in Android Studio Quail 4 or newer. If Android Studio asks for a Gradle distribution, select Gradle 9.6.0. Install Android SDK Platform 36 and Build Tools 36.0.0, sync, then build the `debug` variant.
+Для аппаратного и расчётного PWM в дальнейшем используются разные признаки качества данных. Если значение не приходит напрямую от контроллера, приложение не должно выдавать его за аппаратное.
 
-## Next milestones
+Изменение параметров колеса выполняется только для подтверждённых команд протокола. Для расширенных настроек предусмотрено сохранение исходных значений и восстановление.
 
-1. Real Sherman L BLE capture and parser correction if needed.
-2. Move BLE lifetime into a dedicated connection foreground service.
-3. GPS + local ride database.
-4. Smart-BMS pages and battery model.
-5. Crash detector using phone IMU + wheel telemetry + GPS.
-6. SOS countdown and Telegram bot delivery with coordinates/address.
-7. Map with route coloring by PWM/speed/current.
-8. AI ride analysis.
+## Логи поездок
+
+EUC Lab записывает телеметрию и GPS в CSV. В расширенном просмотре доступны:
+
+- карта маршрута;
+- окраска маршрута по PWM или скорости;
+- воспроизведение поездки по временной шкале;
+- графики основных параметров;
+- автоматические метки максимальной скорости, PWM, температуры и просадки напряжения.
+
+## Куда развивается проект
+
+- поддержка большего числа моделей и производителей;
+- отдельный LeaperKim CAN-over-BLE адаптер;
+- база моделей аккумуляторов и корректные SOC-профили;
+- единая система hardware / estimated PWM;
+- чёрный ящик последних минут телеметрии;
+- обнаружение аварийных событий;
+- внешний BLE-дисплей / EUC Lab Band;
+- дальнейшее развитие анализа поездок.
+
+## Для разработчиков
+
+Проект написан на Kotlin / Jetpack Compose и собирается под Android.
+
+Основная идея архитектуры: **протокол → модель колеса → capabilities → единый интерфейс EUC Lab**. Благодаря этому интерфейс и логика поездок не зависят от конкретного производителя, а особенности колеса подключаются отдельными адаптерами.
+
+Исходный код опубликован для разработки и изучения проекта. Готовые тестовые APK в репозитории не распространяются.
