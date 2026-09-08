@@ -33,6 +33,9 @@ data class Telemetry(
     val batteryPercent: Int = 0,
     val model: String = "Veteran",
     val autoOffSec: Int = 0,
+    val alertSpeedKmh: Int = 0,
+    val tiltbackSpeedKmh: Int = 0,
+    val pedalsModeRaw: Int = 0,
     val keyTonePercent: Int? = null,
     val veteranSettings: VeteranSettingsSnapshot = VeteranSettingsSnapshot(),
 )
