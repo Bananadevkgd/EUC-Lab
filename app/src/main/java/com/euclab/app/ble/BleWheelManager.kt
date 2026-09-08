@@ -13,6 +13,8 @@ import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import androidx.core.app.ActivityCompat
 import com.euclab.app.data.BleCandidate
 import com.euclab.app.data.LinkState
@@ -21,6 +23,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
+import java.util.zip.CRC32
 
 class BleWheelManager(private val context: Context) {
     private val bluetoothManager = context.getSystemService(BluetoothManager::class.java)
@@ -28,6 +31,7 @@ class BleWheelManager(private val context: Context) {
     private val decoder = VeteranFrameDecoder()
     private var gatt: BluetoothGatt? = null
     private var wheelCharacteristic: BluetoothGattCharacteristic? = null
+    private val commandHandler = Handler(Looper.getMainLooper())
 
     private val _lightOn = MutableStateFlow(false)
     val lightOn: StateFlow<Boolean> = _lightOn.asStateFlow()
@@ -140,13 +144,17 @@ class BleWheelManager(private val context: Context) {
         return ok
     }
 
-    fun beep(): Boolean = sendCommand(
-        byteArrayOf(
-            0x4c, 0x6b, 0x41, 0x70, 0x0e, 0x00,
-            0x80.toByte(), 0x80.toByte(), 0x80.toByte(), 0x01,
-            0xca.toByte(), 0x87.toByte(), 0xe6.toByte(), 0x6f,
-        )
-    )
+    fun beep(): Boolean {
+        // Modern LeaperKim firmware expects the horn command in both binary formats.
+        val old = buildVeteranCommandOld(0x0E, 9, 1, byte5 = 0x00)
+        val newer = buildVeteranCommandNew(0x0E, 9, 1, byte5 = 0x00, byte6 = 0x00)
+        return sendStream(old + newer)
+    }
+
+    fun setKeyToneVolume(percent: Int): Boolean {
+        val value = percent.coerceIn(0, 100)
+        return sendStream(buildVeteranCommandNew(0x1C, 23, value, byte5 = 0x01, byte6 = 0x02))
+    }
 
     fun setPedalMode(mode: Int): Boolean = when (mode) {
         0 -> sendCommand("SETh".encodeToByteArray())
@@ -156,6 +164,70 @@ class BleWheelManager(private val context: Context) {
     }
 
     fun resetTrip(): Boolean = sendCommand("CLEARMETER".encodeToByteArray())
+
+    private fun buildVeteranCommandOld(
+        cmdByte: Int,
+        valuePosition: Int,
+        value: Int,
+        byte5: Int = 0x01,
+    ): ByteArray {
+        val payload = ByteArray(valuePosition + 1) { 0x80.toByte() }
+        payload[0] = 0x4C
+        payload[1] = 0x6B // LkAp
+        payload[2] = 0x41
+        payload[3] = 0x70
+        payload[4] = cmdByte.toByte()
+        payload[5] = byte5.toByte()
+        payload[valuePosition] = value.toByte()
+        return appendVeteranCrc(payload)
+    }
+
+    private fun buildVeteranCommandNew(
+        cmdByte: Int,
+        valuePosition: Int,
+        value: Int,
+        byte5: Int = 0x01,
+        byte6: Int = 0x00,
+    ): ByteArray {
+        val payload = ByteArray(valuePosition + 1) { 0x80.toByte() }
+        payload[0] = 0x4C
+        payload[1] = 0x64 // LdAp
+        payload[2] = 0x41
+        payload[3] = 0x70
+        payload[4] = cmdByte.toByte()
+        payload[5] = byte5.toByte()
+        payload[6] = byte6.toByte()
+        payload[valuePosition] = value.toByte()
+        return appendVeteranCrc(payload)
+    }
+
+    private fun appendVeteranCrc(payload: ByteArray): ByteArray {
+        val crc = CRC32().apply { update(payload) }.value
+        return payload + byteArrayOf(
+            ((crc shr 24) and 0xFF).toByte(),
+            ((crc shr 16) and 0xFF).toByte(),
+            ((crc shr 8) and 0xFF).toByte(),
+            (crc and 0xFF).toByte(),
+        )
+    }
+
+    /** BLE writes are limited to 20 bytes on the Veteran command channel. */
+    private fun sendStream(bytes: ByteArray): Boolean {
+        if (bytes.isEmpty()) return false
+        val chunks = mutableListOf<ByteArray>()
+        var offset = 0
+        while (offset < bytes.size) {
+            val end = minOf(offset + 20, bytes.size)
+            chunks += bytes.copyOfRange(offset, end)
+            offset = end
+        }
+        val firstOk = sendCommand(chunks.first())
+        if (!firstOk) return false
+        chunks.drop(1).forEachIndexed { index, chunk ->
+            commandHandler.postDelayed({ sendCommand(chunk) }, 55L * (index + 1))
+        }
+        return true
+    }
 
     @SuppressLint("MissingPermission")
     private fun sendCommand(bytes: ByteArray): Boolean {

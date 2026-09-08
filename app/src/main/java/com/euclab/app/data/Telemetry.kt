@@ -14,6 +14,7 @@ data class Telemetry(
     val charging: Boolean,
     val batteryPercent: Int = 0,
     val model: String = "Veteran",
+    val keyTonePercent: Int? = null,
 )
 
 data class BleCandidate(

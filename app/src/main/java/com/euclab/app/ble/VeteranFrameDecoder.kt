@@ -18,6 +18,7 @@ class VeteranFrameDecoder {
     private var bms1Temps: List<Float> = emptyList()
     private var bms2Temps: List<Float> = emptyList()
     private var bmsSeen = false
+    private var latestKeyTonePercent: Int? = null
 
     fun reset() {
         queue.clear()
@@ -28,6 +29,7 @@ class VeteranFrameDecoder {
         bms1Temps = emptyList()
         bms2Temps = emptyList()
         bmsSeen = false
+        latestKeyTonePercent = null
     }
 
     fun feed(chunk: ByteArray): List<Telemetry> {
@@ -114,6 +116,11 @@ class VeteranFrameDecoder {
 
         if (voltage !in 20f..220f || abs(speed) > 160f || pwm !in 0f..120f) return null
 
+        if (frame.size > 63 && u8(frame[46]) == 8) {
+            val reportedTone = u8(frame[63])
+            if (reportedTone != 0x80 && reportedTone in 0..100) latestKeyTonePercent = reportedTone
+        }
+
         if (modelVersion >= 5) decodeSmartBms(frame)
 
         return Telemetry(
@@ -130,6 +137,7 @@ class VeteranFrameDecoder {
             charging = chargeMode > 0,
             batteryPercent = batteryPercent(modelVersion, voltageRaw),
             model = modelName(modelVersion),
+            keyTonePercent = latestKeyTonePercent,
         )
     }
 
