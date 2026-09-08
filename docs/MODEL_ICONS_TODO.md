@@ -11,4 +11,4 @@ TODO for EUC Lab UI:
 - Oryx
 - Other supported Veteran / LeaperKim models as they are added
 
-The app currently reserves a model-aware badge beside the ONLINE status. Replace the placeholder badge with the supplied wheel artwork when the icon set is ready.
+v0.0.6 reserves a model-aware badge beside the ONLINE status. It currently uses a clean model-code placeholder; replace it with the supplied wheel artwork when the icon set is ready.
