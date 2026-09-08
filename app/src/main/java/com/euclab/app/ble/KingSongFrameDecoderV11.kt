@@ -22,6 +22,8 @@ class KingSongFrameDecoderV11 {
     private var batteryPercent = 0
     private var charging = false
     private var hasLiveData = false
+    private var voiceMuteKnown = false
+    private var voiceMuted = false
 
     fun reset() {
         buffer = ByteArray(0)
@@ -35,12 +37,18 @@ class KingSongFrameDecoderV11 {
         batteryPercent = 0
         charging = false
         hasLiveData = false
+        voiceMuteKnown = false
+        voiceMuted = false
     }
 
     fun setAdvertisedName(name: String?) {
         advertisedName = name.orEmpty()
         if (model == "KingSong") parseAdvertisedModel(advertisedName)?.let { model = it }
     }
+
+    fun muteFlagByteOrNull(): Byte? = if (voiceMuteKnown) {
+        if (voiceMuted) 0x01 else 0x00
+    } else null
 
     fun feed(bytes: ByteArray): List<Telemetry> {
         if (bytes.isEmpty()) return emptyList()
@@ -98,8 +106,6 @@ class KingSongFrameDecoderV11 {
                 speedKmh = rawSpeed / 100f
                 currentA = rawCurrent / 100f
                 tempC = rawTemp / 100f
-                // Always refresh the voltage-derived fallback. If a valid BMS SOC frame
-                // arrives later (0xF6), that direct value replaces this estimate.
                 batteryPercent = estimateBattery(rawVoltage, model)
                 hasLiveData = rawVoltage > 0
             }
@@ -111,6 +117,8 @@ class KingSongFrameDecoderV11 {
                 if (socRaw in 1..101) batteryPercent = socRaw - 1
             }
             0xB9 -> {
+                voiceMuted = u8(frame[11]) == 1
+                voiceMuteKnown = true
                 charging = u8(frame[13]) != 0
             }
             0xC9 -> {
