@@ -3,6 +3,8 @@ package com.euclab.app
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.media.AudioManager
+import android.media.ToneGenerator
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -25,6 +27,8 @@ fun V7AppSettingsExtras(ble: BleWheelManager, ru: Boolean) {
     var pwmAlarm by remember { mutableStateOf(prefs.getBoolean("app_pwm_alarm_enabled", true)) }
     var pwmThreshold by remember { mutableFloatStateOf(prefs.getInt("app_pwm_alarm_threshold", 75).toFloat()) }
     val gpsGranted = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+    val testTone = remember { ToneGenerator(AudioManager.STREAM_ALARM, 92) }
+    DisposableEffect(Unit) { onDispose { testTone.release() } }
 
     Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF11151C)), shape = RoundedCornerShape(22.dp)) {
         Column(Modifier.padding(17.dp)) {
@@ -58,6 +62,17 @@ fun V7AppSettingsExtras(ble: BleWheelManager, ru: Boolean) {
             }
             Slider(value = pwmThreshold, onValueChange = { pwmThreshold = it }, onValueChangeFinished = { prefs.edit().putInt("app_pwm_alarm_threshold", pwmThreshold.roundToInt()).apply() }, valueRange = 50f..90f, enabled = pwmAlarm, colors = SliderDefaults.colors(thumbColor = Color(0xFFFFC857), activeTrackColor = Color(0xFFFFC857), inactiveTrackColor = Color(0xFF303743)))
             Text(if (ru) "Дальше сигнал автоматически становится чаще и жёстче после 85% и 92% PWM." else "The warning automatically escalates above 85% and 92% PWM.", color = Color(0xFF7C8798), fontSize = 9.sp)
+            Spacer(Modifier.height(10.dp))
+            OutlinedButton(
+                onClick = { testTone.startTone(ToneGenerator.TONE_CDMA_ALERT_CALL_GUARD, 450) },
+                enabled = pwmAlarm,
+                modifier = Modifier.fillMaxWidth(),
+                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFC857)),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFFFFC857)),
+                shape = RoundedCornerShape(15.dp),
+            ) {
+                Text(if (ru) "ПРОВЕРИТЬ ЗВУК ПРЕДУПРЕЖДЕНИЯ" else "TEST WARNING SOUND", fontSize = 9.sp, fontWeight = FontWeight.Black)
+            }
         }
     }
 
