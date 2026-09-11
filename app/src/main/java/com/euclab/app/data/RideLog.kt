@@ -2,7 +2,11 @@ package com.euclab.app.data
 
 import java.io.File
 import java.time.Instant
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.sin
+import kotlin.math.sqrt
 
 data class RideSample(
     val timestampMs: Long,
@@ -35,8 +39,44 @@ data class RideLog(
     val maxPwm: Float get() = samples.maxOfOrNull { it.pwmPercent } ?: 0f
     val minVoltageV: Float get() = samples.minOfOrNull { it.voltageV } ?: 0f
     val maxTempC: Float get() = samples.maxOfOrNull { it.mosfetTempC } ?: 0f
-    val distanceKm: Float get() = if (samples.size < 2) 0f else (samples.last().tripKm - samples.first().tripKm).coerceAtLeast(0f)
     val gpsSamples: List<RideSample> get() = samples.filter { it.latitude != null && it.longitude != null }
+
+    /**
+     * Prefer the wheel trip counter when it actually moved. Some protocols/models
+     * don't expose a useful per-trip value, so fall back to the GPS trace instead of
+     * displaying 0.0 km next to hundreds of valid GPS samples.
+     */
+    val distanceKm: Float
+        get() {
+            if (samples.size >= 2) {
+                val wheelDelta = samples.last().tripKm - samples.first().tripKm
+                if (wheelDelta > 0.005f) return wheelDelta
+            }
+            val gps = gpsSamples
+            if (gps.size < 2) return 0f
+            var meters = 0.0
+            for (i in 1 until gps.size) {
+                val a = gps[i - 1]
+                val b = gps[i]
+                val accuracy = maxOf(a.gpsAccuracyM ?: 0f, b.gpsAccuracyM ?: 0f)
+                if (accuracy > 80f) continue
+                val segment = haversineMeters(a.latitude!!, a.longitude!!, b.latitude!!, b.longitude!!)
+                // Reject impossible phone-GPS jumps while keeping normal EUC speeds.
+                val dtSec = ((b.timestampMs - a.timestampMs).coerceAtLeast(1L)) / 1000.0
+                if (segment / dtSec <= 55.0) meters += segment
+            }
+            return (meters / 1000.0).toFloat()
+        }
+
+    private fun haversineMeters(lat1: Double, lon1: Double, lat2: Double, lon2: Double): Double {
+        val r = 6_371_000.0
+        val p1 = Math.toRadians(lat1)
+        val p2 = Math.toRadians(lat2)
+        val dp = Math.toRadians(lat2 - lat1)
+        val dl = Math.toRadians(lon2 - lon1)
+        val h = sin(dp / 2) * sin(dp / 2) + cos(p1) * cos(p2) * sin(dl / 2) * sin(dl / 2)
+        return 2 * r * atan2(sqrt(h), sqrt(1 - h))
+    }
 }
 
 object RideLogReader {
