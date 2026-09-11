@@ -12,11 +12,11 @@ import com.euclab.app.data.RideLog
 import kotlin.math.absoluteValue
 
 /**
- * Self-contained route renderer for v0.0.8.
+ * Self-contained route renderer.
  *
- * Unlike the old Leaflet page, all layout / projection / route drawing code is inline.
- * Only the raster street tiles are fetched over the network. If tile loading fails,
- * the SVG route still remains visible on the dark background.
+ * v0.0.13 fix: the WebView is no longer reloaded on every Compose recomposition.
+ * Active telemetry used to trigger repeated loadDataWithBaseURL() calls before the
+ * route JavaScript could finish rendering, which could leave the card blank.
  */
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -44,11 +44,27 @@ fun V8RouteMap(ride: RideLog, colorByPwm: Boolean, modifier: Modifier = Modifier
                 settings.domStorageEnabled = true
                 settings.loadsImagesAutomatically = true
                 setBackgroundColor(AndroidColor.rgb(10, 13, 18))
-                webViewClient = WebViewClient()
+                // Some vendor WebViews are more reliable for SVG overlays in software mode.
+                setLayerType(WebView.LAYER_TYPE_SOFTWARE, null)
+                webViewClient = object : WebViewClient() {
+                    override fun onPageFinished(view: WebView?, url: String?) {
+                        super.onPageFinished(view, url)
+                        view?.evaluateJavascript("if (typeof render === 'function') { render(); setTimeout(render, 180); }", null)
+                    }
+                }
+                tag = html
                 loadDataWithBaseURL("https://euc-lab.local/", html, "text/html", "UTF-8", null)
             }
         },
-        update = { web -> web.loadDataWithBaseURL("https://euc-lab.local/", html, "text/html", "UTF-8", null) },
+        update = { web ->
+            // Critical: do not reload the WebView just because Compose recomposed.
+            if (web.tag != html) {
+                web.tag = html
+                web.loadDataWithBaseURL("https://euc-lab.local/", html, "text/html", "UTF-8", null)
+            } else {
+                web.evaluateJavascript("if (typeof render === 'function') render();", null)
+            }
+        },
     )
 }
 
@@ -70,6 +86,7 @@ html,body,#map{width:100%;height:100%;margin:0;overflow:hidden;background:#0a0d1
 #route{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 .badge{position:absolute;left:10px;top:10px;background:rgba(9,12,17,.86);color:#cad2dd;border:1px solid rgba(255,255,255,.10);border-radius:10px;padding:6px 8px;font-size:10px;font-weight:700;letter-spacing:.4px}
 .attr{position:absolute;right:5px;bottom:4px;background:rgba(9,12,17,.70);color:#7c8798;border-radius:5px;padding:2px 4px;font-size:7px}
+.empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;color:#7c8798;font-size:12px}
 </style>
 </head>
 <body>
@@ -89,7 +106,7 @@ function clr(v){
   return `hsl(${ '$' }{Math.round(hue)},92%,57%)`;
 }
 function render(){
-  if(!pts.length) return;
+  if(!pts.length){ tiles.innerHTML='<div class="empty">No GPS points</div>'; return; }
   const w=map.clientWidth||600,h=map.clientHeight||300,pad=28;
   let z=18,b=null;
   for(;z>=3;z--){
@@ -119,7 +136,9 @@ function render(){
   }
   [[0,'#6dff9a'],[b.pp.length-1,'#ff5060']].forEach(([idx,c])=>{const p=b.pp[idx],circle=document.createElementNS(ns,'circle');circle.setAttribute('cx',p.x-left);circle.setAttribute('cy',p.y-top);circle.setAttribute('r','6');circle.setAttribute('fill',c);circle.setAttribute('stroke','#0a0d12');circle.setAttribute('stroke-width','3');svg.appendChild(circle);});
 }
-window.addEventListener('resize',render); setTimeout(render,20);
+window.addEventListener('resize',render);
+window.addEventListener('load',()=>{render();setTimeout(render,120);setTimeout(render,500);});
+setTimeout(render,20);
 </script>
 </body>
 </html>
