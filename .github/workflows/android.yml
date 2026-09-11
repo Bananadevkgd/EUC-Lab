@@ -25,7 +25,7 @@ jobs:
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-36" "build-tools;36.0.0"
       - name: Apply v0.0.13 source patch
-        run: python3 scripts/run_v13.py
+        run: python3 scripts/run_v13_ci.py
       - name: Build
         run: gradle :app:assembleDebug --stacktrace
       - uses: actions/upload-artifact@v4
