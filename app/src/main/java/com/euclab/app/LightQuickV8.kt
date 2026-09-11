@@ -40,8 +40,8 @@ fun V8LightQuick(
         targetState = caps.supportsHighBeam,
         label = "lynx_s_headlight",
         modifier = Modifier.fillMaxWidth().animateContentSize(tween(260)),
-    ) { split ->
-        if (!split) {
+    ) { lynxS ->
+        if (!lynxS) {
             LightHalf(
                 modifier = Modifier.fillMaxWidth(),
                 title = if (ru) "ФАРА" else "HEADLIGHT",
@@ -52,40 +52,48 @@ fun V8LightQuick(
                 },
                 active = lightOn,
                 enabled = online,
+                stateText = if (lightOn) "ON" else "OFF",
                 onClick = { ble.setLight(!lightOn) },
             )
         } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                LightHalf(
-                    modifier = Modifier.weight(1f),
-                    title = if (ru) "ФАРА" else "LIGHT",
-                    subtitle = if (lightOn) (if (ru) "Включена" else "On") else (if (ru) "Выключена" else "Off"),
-                    active = lightOn,
-                    enabled = online,
-                    onClick = {
-                        if (lightOn) {
-                            if (highBeamOn) ble.setHighBeam(false)
-                            ble.setLight(false)
-                        } else {
-                            ble.setLight(true)
-                        }
-                    },
-                )
-                LightHalf(
-                    modifier = Modifier.weight(1f),
-                    title = if (highBeamOn) (if (ru) "ДАЛЬНИЙ" else "HIGH") else (if (ru) "БЛИЖНИЙ" else "LOW"),
-                    subtitle = if (!lightOn) {
-                        if (ru) "Сначала включи фару" else "Turn the light on first"
-                    } else if (ru) {
-                        "Нажми для переключения"
-                    } else {
-                        "Tap to switch"
-                    },
-                    active = highBeamOn,
-                    enabled = online && lightOn,
-                    onClick = { ble.setHighBeam(!highBeamOn) },
-                )
+            // Lynx S mirrors the physical power-button sequence:
+            // OFF -> low beam -> high beam -> OFF.
+            val title = when {
+                !lightOn -> if (ru) "ФАРА · ВЫКЛ" else "LIGHT · OFF"
+                highBeamOn -> if (ru) "ДАЛЬНИЙ" else "HIGH BEAM"
+                else -> if (ru) "БЛИЖНИЙ" else "LOW BEAM"
             }
+            val state = when {
+                !lightOn -> "OFF"
+                highBeamOn -> if (ru) "ДАЛЬНИЙ" else "HIGH"
+                else -> if (ru) "БЛИЖНИЙ" else "LOW"
+            }
+            LightHalf(
+                modifier = Modifier.fillMaxWidth(),
+                title = title,
+                subtitle = if (!online) {
+                    if (ru) "Сначала подключи колесо" else "Connect the wheel first"
+                } else if (ru) {
+                    "Нажатие: OFF → ближний → дальний → OFF"
+                } else {
+                    "Tap: OFF → low → high → OFF"
+                },
+                active = lightOn,
+                enabled = online,
+                stateText = state,
+                onClick = {
+                    when {
+                        !lightOn -> ble.setLight(true)
+                        !highBeamOn -> ble.setHighBeam(true)
+                        else -> {
+                            // Return to OFF in the same order as the wheel: remove high beam,
+                            // then switch the base/low beam off.
+                            ble.setHighBeam(false)
+                            ble.setLight(false)
+                        }
+                    }
+                },
+            )
         }
     }
 }
@@ -97,6 +105,7 @@ private fun LightHalf(
     subtitle: String,
     active: Boolean,
     enabled: Boolean,
+    stateText: String,
     onClick: () -> Unit,
 ) {
     Card(
@@ -111,7 +120,7 @@ private fun LightHalf(
                 androidx.compose.material3.Text(title, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black)
                 androidx.compose.material3.Text(subtitle, color = if (enabled) L8Muted else Color(0xFF59616D), fontSize = 9.sp, lineHeight = 12.sp)
             }
-            androidx.compose.material3.Text(if (active) "ON" else "OFF", color = if (active) L8Accent else Color.White, fontSize = 14.sp, fontWeight = FontWeight.Black)
+            androidx.compose.material3.Text(stateText, color = if (active) L8Accent else Color.White, fontSize = 12.sp, fontWeight = FontWeight.Black)
         }
     }
 }
